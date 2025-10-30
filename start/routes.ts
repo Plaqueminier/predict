@@ -15,4 +15,5 @@ router.get('/', async () => {
   }
 })
 
-router.get('/events/ending-soon', '#controllers/events_controller.endingSoon')
+router.get('/events/opportunities', '#controllers/opportunities_controller.index')
+router.get('/events/flipped', '#controllers/opportunities_controller.flipped')

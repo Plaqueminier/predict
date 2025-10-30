@@ -2,7 +2,9 @@ import env from '#start/env'
 import { DateTime } from 'luxon'
 import logger from '@adonisjs/core/services/logger'
 
-export interface EventSummary {
+type BucketKey = 'onePercent' | 'twoPercent' | 'threePercent' | 'fourPercent' | 'fivePercent'
+
+export interface MarketSummary {
   question: string
   endDate: string | null
   resolutionState: string | null
@@ -13,17 +15,13 @@ export interface EventSummary {
   oneWeekPriceChange: number | null
   oneMonthPriceChange: number | null
   timeToEnd: string | null
+  bestPrice: number | null
+  url: string
+  eventUrl: string
+  volume: number | null
 }
 
-export interface EndingSoonResponse {
-  meta: {
-    fetchedAt: string
-    count: number
-    gammaUrl: string
-    windowHours: number
-  }
-  data: EventSummary[]
-}
+export type OpportunitiesResponse = Record<BucketKey, MarketSummary[]>
 
 class PolymarketServiceError extends Error {
   status: number
@@ -37,16 +35,16 @@ class PolymarketServiceError extends Error {
 type RawEvent = Record<string, any>
 
 interface CacheEntry {
-  payload: EndingSoonResponse
+  payload: unknown
   expiresAt: DateTime
 }
 
-const DEFAULT_ENDPOINT =
-  'https://gamma-api.polymarket.com/events?limit=1000&sortKey=endDate&sortDir=asc'
-const CACHE_KEY = 'ending-soon'
+const DEFAULT_ENDPOINT = 'https://gamma-api.polymarket.com/events'
+const CACHE_KEY_OPPORTUNITIES = 'opportunities'
+const CACHE_KEY_FLIPPED = 'flipped'
 const CACHE_TTL_SECONDS = 60
 
-interface EventCandidate extends EventSummary {
+interface MarketCandidate extends MarketSummary {
   hoursToClose: number | null
 }
 
@@ -67,22 +65,24 @@ export default class PolymarketService {
   constructor(private readonly nowFn: () => DateTime = () => DateTime.utc()) {}
 
   /**
-   * Retrieve markets closing within the provided time window.
+   * Retrieve investable markets grouped by price thresholds.
    */
-  async getEndingSoon(windowHours = 72): Promise<EndingSoonResponse> {
+  async getOpportunities(windowHours = 24): Promise<OpportunitiesResponse> {
     const now = this.nowFn()
-    const cached = this.lookupCache(now)
+    const cached = this.lookupCache<OpportunitiesResponse>(CACHE_KEY_OPPORTUNITIES, now)
 
     if (cached) {
       return cached
     }
 
     const requestUrl = this.buildUrl(now, windowHours)
-    logger.debug({ url: requestUrl.toString() }, 'polymarket events fetch started')
+    logger.debug({ url: requestUrl.toString() }, 'polymarket opportunities fetch started')
     const data = await this.fetchEvents(requestUrl)
     const candidates = data
-      .map((entry) => this.normaliseEvent(entry, now))
-      .filter((event): event is EventCandidate => this.isWithinWindow(event, windowHours))
+      .flatMap((entry) => this.normaliseMarkets(entry, now))
+      .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 10_000)
+      .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
+      .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
       .sort((a, b) => {
         if (!a.endDate || !b.endDate) {
           return 0
@@ -91,52 +91,68 @@ export default class PolymarketService {
         return DateTime.fromISO(a.endDate).toMillis() - DateTime.fromISO(b.endDate).toMillis()
       })
 
-    const events: EventSummary[] = candidates.map((event) => ({
-      question: event.question,
-      endDate: event.endDate,
-      resolutionState: event.resolutionState,
-      tags: this.deduplicateTags(event.tags),
-      outcomes: event.outcomes,
-      outcomePrices: event.outcomePrices,
-      oneDayPriceChange: event.oneDayPriceChange,
-      oneWeekPriceChange: event.oneWeekPriceChange,
-      oneMonthPriceChange: event.oneMonthPriceChange,
-      timeToEnd: event.timeToEnd,
-    }))
+    const payload = this.buildBuckets(candidates)
 
-    const payload: EndingSoonResponse = {
-      meta: {
-        fetchedAt: now.toISO() ?? '',
-        count: events.length,
-        gammaUrl: requestUrl.toString(),
-        windowHours,
+    logger.debug(
+      {
+        counts: Object.fromEntries(
+          Object.entries(payload).map(([key, markets]) => [key, markets.length])
+        ),
       },
-      data: events,
-    }
+      'polymarket opportunities fetch completed'
+    )
 
-    logger.debug({ count: events.length }, 'polymarket events fetch completed')
-
-    this.setCache(payload, now)
+    this.setCache(CACHE_KEY_OPPORTUNITIES, payload, now)
     return payload
   }
 
-  private lookupCache(now: DateTime): EndingSoonResponse | null {
-    const entry = PolymarketService.cache[CACHE_KEY]
+  async getFlipped(windowHours = 72): Promise<MarketSummary[]> {
+    const now = this.nowFn()
+    const cached = this.lookupCache<MarketSummary[]>(CACHE_KEY_FLIPPED, now)
+
+    if (cached) {
+      return cached
+    }
+
+    const requestUrl = this.buildUrl(now, windowHours)
+    logger.debug({ url: requestUrl.toString() }, 'polymarket flipped fetch started')
+    const data = await this.fetchEvents(requestUrl)
+    const markets = data
+      .flatMap((entry) => this.normaliseMarkets(entry, now))
+      .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 50_000)
+      .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
+      .filter((market): market is MarketCandidate => this.hasFlipped(market))
+      .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
+      .sort((a, b) => {
+        if (!a.endDate || !b.endDate) {
+          return 0
+        }
+
+        return DateTime.fromISO(a.endDate).toMillis() - DateTime.fromISO(b.endDate).toMillis()
+      })
+      .map((candidate) => this.toSummary(candidate))
+
+    this.setCache(CACHE_KEY_FLIPPED, markets, now)
+    return markets
+  }
+
+  private lookupCache<T>(key: string, now: DateTime): T | null {
+    const entry = PolymarketService.cache[key]
 
     if (!entry) {
       return null
     }
 
     if (entry.expiresAt <= now) {
-      PolymarketService.cache[CACHE_KEY] = undefined
+      PolymarketService.cache[key] = undefined
       return null
     }
 
-    return entry.payload
+    return entry.payload as T
   }
 
-  private setCache(payload: EndingSoonResponse, now: DateTime) {
-    PolymarketService.cache[CACHE_KEY] = {
+  private setCache(key: string, payload: unknown, now: DateTime) {
+    PolymarketService.cache[key] = {
       payload,
       expiresAt: now.plus({ seconds: CACHE_TTL_SECONDS }),
     }
@@ -156,12 +172,15 @@ export default class PolymarketService {
       url.pathname = '/events'
     }
 
-    url.searchParams.set('limit', url.searchParams.get('limit') ?? '1000')
-    url.searchParams.set('closed', url.searchParams.get('closed') ?? 'false')
-    url.searchParams.set('active', url.searchParams.get('active') ?? 'true')
-    url.searchParams.set('archived', url.searchParams.get('archived') ?? 'false')
-    // Tag 1 is "Sports"
-    url.searchParams.set('exclude_tag_id', url.searchParams.get('exclude_tag_id') ?? '1')
+    url.searchParams.set('limit', '500')
+    url.searchParams.set('closed', 'false')
+    url.searchParams.set('active', 'true')
+    url.searchParams.set('archived', 'false')
+
+    // Tag 1 is "Sports", 64 is for "Esports", 102467 is for "Crypto 15 minutes", 102175 is for "Crypto 1 hour", 102531 is "Crypto 4H"
+    for (const tagId of [1, 64, 102467, 102175, 102531]) {
+      url.searchParams.append('exclude_tag_id', tagId.toString())
+    }
     const endDateMin = now.toISODate() ?? undefined
     const endDateMax = now.plus({ hours: windowHours }).toISODate() ?? undefined
     if (endDateMin) {
@@ -225,38 +244,56 @@ export default class PolymarketService {
     throw new PolymarketServiceError('Polymarket API returned an unexpected payload', 500)
   }
 
-  private normaliseEvent(entry: RawEvent, now: DateTime): EventCandidate {
-    const primaryMarket = this.pickPrimaryMarket(entry)
-    const endDate = this.resolveEndDate(entry, primaryMarket)
+  private normaliseMarkets(entry: RawEvent, now: DateTime): MarketCandidate[] {
+    const markets =
+      Array.isArray(entry.markets) && entry.markets.length > 0 ? entry.markets : [null]
+    return markets.map((market) => this.normaliseMarket(entry, market, now))
+  }
+
+  private normaliseMarket(
+    entry: RawEvent,
+    market: Record<string, any> | null,
+    now: DateTime
+  ): MarketCandidate {
+    const endDate = this.resolveEndDate(entry, market)
     const hoursToClose = endDate ? this.computeHoursToClose(endDate, now) : null
     const timeToEnd = endDate ? this.computeTimeToEnd(endDate, now) : null
 
-    const outcomes = this.parseStringList(primaryMarket?.outcomes ?? entry.outcomes)
-    const outcomePrices = this.parseNumberList(primaryMarket?.outcomePrices ?? entry.outcomePrices)
-
-    const tags = this.extractTags(entry, primaryMarket)
+    const outcomes = this.parseStringList(market?.outcomes ?? entry.outcomes)
+    const outcomePrices = this.parseNumberList(market?.outcomePrices ?? entry.outcomePrices)
+    const tags = this.extractTags(entry.tags, entry.categories, market?.tags, market?.categories)
+    const bestPrice =
+      outcomePrices.length > 0 ? Math.min(...outcomePrices.filter((price) => price > 0)) : null
+    const url = this.resolveMarketUrl(entry, market)
+    const eventUrl = this.resolveEventUrl(entry)
+    const volume = this.asNullableNumber(market?.volume ?? market?.volumeNum ?? entry.volume)
 
     const oneDayPriceChange = this.asNullableNumber(
-      primaryMarket?.oneDayPriceChange ?? entry.oneDayPriceChange
+      market?.oneDayPriceChange ?? entry.oneDayPriceChange
     )
     const oneWeekPriceChange = this.asNullableNumber(
-      primaryMarket?.oneWeekPriceChange ?? entry.oneWeekPriceChange
+      market?.oneWeekPriceChange ?? entry.oneWeekPriceChange
     )
     const oneMonthPriceChange = this.asNullableNumber(
-      primaryMarket?.oneMonthPriceChange ?? entry.oneMonthPriceChange
+      market?.oneMonthPriceChange ?? entry.oneMonthPriceChange
     )
 
-    const event: EventCandidate = {
-      question: this.asString(
+    const question = this.asString(
+      market?.question ??
+        market?.title ??
+        market?.name ??
         entry.question ??
-          entry.title ??
-          entry.name ??
-          primaryMarket?.question ??
-          primaryMarket?.title
-      ),
+        entry.title ??
+        entry.name ??
+        entry.slug ??
+        entry.id
+    )
+
+    const summary: MarketCandidate = {
+      question,
       endDate: endDate?.toISO() ?? null,
       hoursToClose,
-      resolutionState: this.resolveResolutionState(entry, primaryMarket),
+      resolutionState: this.resolveResolutionState(entry, market),
       tags,
       outcomes,
       outcomePrices,
@@ -264,9 +301,13 @@ export default class PolymarketService {
       oneWeekPriceChange,
       oneMonthPriceChange,
       timeToEnd,
+      bestPrice: Number.isFinite(bestPrice ?? Number.NaN) ? bestPrice : null,
+      url,
+      eventUrl,
+      volume,
     }
 
-    return event
+    return summary
   }
 
   private asString(value: unknown): string {
@@ -345,10 +386,7 @@ export default class PolymarketService {
     return []
   }
 
-  private extractTags(
-    entry: RawEvent,
-    primaryMarket: Record<string, any> | null
-  ): Array<{ id: string; label: string }> {
+  private extractTags(...sources: unknown[]): Array<{ id: string; label: string }> {
     const tags: Array<{ id: string; label: string }> = []
 
     const collect = (value: unknown) => {
@@ -389,16 +427,17 @@ export default class PolymarketService {
       }
     }
 
-    if (Array.isArray(entry.tags)) {
-      entry.tags.forEach(collect)
-    }
+    for (const source of sources) {
+      if (!source) {
+        continue
+      }
 
-    if (Array.isArray(entry.categories)) {
-      entry.categories.forEach(collect)
-    }
+      if (Array.isArray(source)) {
+        source.forEach(collect)
+        continue
+      }
 
-    if (primaryMarket && Array.isArray(primaryMarket.tags)) {
-      primaryMarket.tags.forEach(collect)
+      collect(source)
     }
 
     return tags
@@ -426,29 +465,20 @@ export default class PolymarketService {
 
   private resolveResolutionState(
     entry: RawEvent,
-    primaryMarket: Record<string, any> | null
+    market: Record<string, any> | null
   ): string | null {
-    const state = this.asNullableString(entry.resolutionState)
-    if (state) {
-      return state
+    const marketState = this.asNullableString(market?.resolutionState ?? market?.status)
+    if (marketState) {
+      return marketState
     }
 
-    const status = this.asNullableString(entry.status)
-    if (status && ['resolved', 'closed', 'settled'].includes(status.toLowerCase())) {
-      return status
+    if (typeof market?.resolved === 'boolean') {
+      return market.resolved ? 'resolved' : 'unresolved'
     }
 
-    if (primaryMarket) {
-      const primaryState = this.asNullableString(
-        primaryMarket.resolutionState ?? primaryMarket.status
-      )
-      if (primaryState) {
-        return primaryState
-      }
-
-      if (typeof primaryMarket.resolved === 'boolean') {
-        return primaryMarket.resolved ? 'resolved' : 'unresolved'
-      }
+    const eventState = this.asNullableString(entry.resolutionState ?? entry.status)
+    if (eventState) {
+      return eventState
     }
 
     if (typeof entry.resolved === 'boolean') {
@@ -458,10 +488,14 @@ export default class PolymarketService {
     return null
   }
 
-  private resolveEndDate(
-    entry: RawEvent,
-    primaryMarket: Record<string, any> | null
-  ): DateTime | null {
+  private resolveEndDate(entry: RawEvent, market: Record<string, any> | null): DateTime | null {
+    if (market) {
+      const fromMarket = this.resolveEndDateFromMarket(market)
+      if (fromMarket) {
+        return fromMarket
+      }
+    }
+
     if (typeof entry.endDate === 'string') {
       const parsed = DateTime.fromISO(entry.endDate, { zone: 'utc' })
       if (parsed.isValid) {
@@ -492,16 +526,9 @@ export default class PolymarketService {
       }
     }
 
-    if (primaryMarket) {
-      const fromPrimary = this.resolveEndDateFromMarket(primaryMarket)
-      if (fromPrimary) {
-        return fromPrimary
-      }
-    }
-
     if (Array.isArray(entry.markets)) {
       const candidates = entry.markets
-        .map((market) => this.resolveEndDateFromMarket(market))
+        .map((candidate) => this.resolveEndDateFromMarket(candidate))
         .filter((value): value is DateTime => !!value)
         .sort((a, b) => a.toMillis() - b.toMillis())
       if (candidates.length > 0) {
@@ -512,44 +539,16 @@ export default class PolymarketService {
     return null
   }
 
-  private pickPrimaryMarket(entry: RawEvent): Record<string, any> | null {
-    if (!Array.isArray(entry.markets)) {
-      return null
-    }
-
-    const candidates = entry.markets.filter(
-      (market): market is Record<string, any> => market && typeof market === 'object'
-    )
-
-    if (candidates.length === 0) {
-      return null
-    }
-
-    candidates.sort((a, b) => {
-      const aEnd = this.resolveEndDateFromMarket(a)
-      const bEnd = this.resolveEndDateFromMarket(b)
-
-      if (!aEnd && !bEnd) {
-        return 0
-      }
-
-      if (!aEnd) {
-        return 1
-      }
-
-      if (!bEnd) {
-        return -1
-      }
-
-      return aEnd.toMillis() - bEnd.toMillis()
-    })
-
-    return candidates[0] ?? null
-  }
-
   private resolveEndDateFromMarket(market: Record<string, any>): DateTime | null {
     if (typeof market.endDate === 'string') {
       const parsed = DateTime.fromISO(market.endDate, { zone: 'utc' })
+      if (parsed.isValid) {
+        return parsed.toUTC()
+      }
+    }
+
+    if (typeof market.endDateIso === 'string') {
+      const parsed = DateTime.fromISO(market.endDateIso, { zone: 'utc' })
       if (parsed.isValid) {
         return parsed.toUTC()
       }
@@ -604,7 +603,7 @@ export default class PolymarketService {
     return Math.round(diff * 100) / 100
   }
 
-  private computeTimeToEnd(endDate: DateTime, now: DateTime): EventSummary['timeToEnd'] {
+  private computeTimeToEnd(endDate: DateTime, now: DateTime): MarketSummary['timeToEnd'] {
     const diff = endDate.diff(now, ['hours', 'minutes', 'seconds'])
 
     if (!diff.isValid || diff.as('seconds') <= 0) {
@@ -619,25 +618,120 @@ export default class PolymarketService {
     return [hours, minutes, seconds].map((value) => String(value).padStart(2, '0')).join(':')
   }
 
-  private isWithinWindow(event: EventCandidate, windowHours: number): event is EventCandidate {
-    if (event.hoursToClose === null) {
+  private isWithinWindow(market: MarketCandidate, windowHours: number): market is MarketCandidate {
+    if (market.hoursToClose === null) {
       return false
     }
 
-    if (event.hoursToClose <= 0) {
+    if (market.hoursToClose <= 0) {
       return false
     }
 
-    if (event.hoursToClose > windowHours) {
+    if (market.hoursToClose > windowHours) {
       return false
     }
 
-    const resolutionState = event.resolutionState?.toLowerCase()
+    const resolutionState = market.resolutionState?.toLowerCase()
     if (resolutionState === 'resolved') {
       return false
     }
 
     return true
+  }
+
+  private hasInvestableOdds(market: MarketCandidate): boolean {
+    const bucket = this.resolveBucket(market.bestPrice)
+    return bucket !== null
+  }
+
+  private hasFlipped(market: MarketCandidate): boolean {
+    if (market.oneDayPriceChange === null) {
+      return false
+    }
+
+    return Math.abs(market.oneDayPriceChange) >= 0.5
+  }
+
+  private resolveBucket(price: number | null): BucketKey | null {
+    if (price === null || price < 0.01) {
+      return null
+    }
+
+    if (price <= 0.01) return 'onePercent'
+    if (price <= 0.02) return 'twoPercent'
+    if (price <= 0.03) return 'threePercent'
+    if (price <= 0.04) return 'fourPercent'
+    if (price <= 0.05) return 'fivePercent'
+
+    return null
+  }
+
+  private buildBuckets(candidates: MarketCandidate[]): OpportunitiesResponse {
+    const buckets: OpportunitiesResponse = {
+      onePercent: [],
+      twoPercent: [],
+      threePercent: [],
+      fourPercent: [],
+      fivePercent: [],
+    }
+
+    for (const candidate of candidates) {
+      const bucketKey = this.resolveBucket(candidate.bestPrice)
+      if (!bucketKey) {
+        continue
+      }
+
+      const bucket = buckets[bucketKey]
+      if (bucket.length >= 10) {
+        continue
+      }
+
+      bucket.push(this.toSummary(candidate))
+    }
+
+    return buckets
+  }
+
+  private toSummary(candidate: MarketCandidate): MarketSummary {
+    return {
+      question: candidate.question,
+      endDate: candidate.endDate,
+      resolutionState: candidate.resolutionState,
+      tags: this.deduplicateTags(candidate.tags),
+      outcomes: candidate.outcomes,
+      outcomePrices: candidate.outcomePrices,
+      oneDayPriceChange: candidate.oneDayPriceChange,
+      oneWeekPriceChange: candidate.oneWeekPriceChange,
+      oneMonthPriceChange: candidate.oneMonthPriceChange,
+      timeToEnd: candidate.timeToEnd,
+      bestPrice: candidate.bestPrice,
+      url: candidate.url,
+      eventUrl: candidate.eventUrl,
+      volume: candidate.volume,
+    }
+  }
+
+  private resolveMarketUrl(entry: RawEvent, market: Record<string, any> | null): string {
+    const marketSlug = this.asNullableString(market?.slug)
+    if (marketSlug) {
+      return `https://polymarket.com/market/${marketSlug}`
+    }
+
+    const eventSlug = this.asNullableString(entry.slug ?? entry.id)
+    if (eventSlug) {
+      return `https://polymarket.com/event/${eventSlug}`
+    }
+
+    return 'https://polymarket.com'
+  }
+
+  private resolveEventUrl(entry: RawEvent): string {
+    const eventSlug = this.asNullableString(entry.slug ?? entry.id)
+    if (eventSlug) {
+      return `https://polymarket.com/event/${eventSlug}`
+    }
+
+    return 'https://polymarket.com'
   }
 }
 
