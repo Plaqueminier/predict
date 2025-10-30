@@ -106,7 +106,7 @@ export default class PolymarketService {
     return payload
   }
 
-  async getFlipped(windowHours = 72): Promise<MarketSummary[]> {
+  async getFlipped(windowHours = 168): Promise<MarketSummary[]> {
     const now = this.nowFn()
     const cached = this.lookupCache<MarketSummary[]>(CACHE_KEY_FLIPPED, now)
 
@@ -682,7 +682,7 @@ export default class PolymarketService {
       }
 
       const bucket = buckets[bucketKey]
-      if (bucket.length >= 10) {
+      if (bucket.length >= 5) {
         continue
       }
 
