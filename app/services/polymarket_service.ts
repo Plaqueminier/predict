@@ -88,11 +88,10 @@ export default class PolymarketService {
       .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
       .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
       .sort((a, b) => {
-        if (!a.endDate || !b.endDate) {
-          return 0
-        }
-
-        return DateTime.fromISO(a.endDate).toMillis() - DateTime.fromISO(b.endDate).toMillis()
+        // Sort by volume descending (highest first)
+        const volA = a.volume ?? 0
+        const volB = b.volume ?? 0
+        return volB - volA
       })
 
     const payload = this.buildBuckets(candidates)
@@ -128,11 +127,10 @@ export default class PolymarketService {
       .filter((market): market is MarketCandidate => this.hasFlipped(market))
       .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
       .sort((a, b) => {
-        if (!a.endDate || !b.endDate) {
-          return 0
-        }
-
-        return DateTime.fromISO(a.endDate).toMillis() - DateTime.fromISO(b.endDate).toMillis()
+        // Sort by volume descending (highest first)
+        const volA = a.volume ?? 0
+        const volB = b.volume ?? 0
+        return volB - volA
       })
 
     const payload = this.buildFlippedCategories(candidates)
@@ -708,9 +706,9 @@ export default class PolymarketService {
     }
 
     if (price <= 0.05) return 'oneToFive'
-    if (price <= 0.10) return 'fiveToTen'
+    if (price <= 0.1) return 'fiveToTen'
     if (price <= 0.15) return 'tenToFifteen'
-    if (price <= 0.20) return 'fifteenToTwenty'
+    if (price <= 0.2) return 'fifteenToTwenty'
 
     return null
   }
