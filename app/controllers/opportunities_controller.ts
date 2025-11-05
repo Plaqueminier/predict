@@ -3,8 +3,8 @@ import logger from '@adonisjs/core/services/logger'
 
 import PolymarketService, {
   OpportunitiesResponse,
+  FlippedResponse,
   PolymarketServiceError,
-  MarketSummary,
 } from '#services/polymarket_service'
 
 export default class OpportunitiesController {
@@ -39,8 +39,8 @@ export default class OpportunitiesController {
     logger.debug({ path: request.url(), ip: request.ip() }, 'markets flipped requested')
 
     try {
-      const markets: MarketSummary[] = await this.polymarketService.getFlipped()
-      return response.ok(markets)
+      const categories: FlippedResponse = await this.polymarketService.getFlipped()
+      return response.ok(categories)
     } catch (error) {
       if (error instanceof PolymarketServiceError) {
         logger.warn(

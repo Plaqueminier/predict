@@ -2,7 +2,9 @@ import env from '#start/env'
 import { DateTime } from 'luxon'
 import logger from '@adonisjs/core/services/logger'
 
-type BucketKey = 'onePercent' | 'twoPercent' | 'threePercent' | 'fourPercent' | 'fivePercent'
+type BucketKey = 'oneToFive' | 'fiveToTen' | 'tenToFifteen' | 'fifteenToTwenty'
+
+type FlippedCategory = 'twentyToFifty' | 'aboveFifty'
 
 export interface MarketSummary {
   question: string
@@ -22,6 +24,8 @@ export interface MarketSummary {
 }
 
 export type OpportunitiesResponse = Record<BucketKey, MarketSummary[]>
+
+export type FlippedResponse = Record<FlippedCategory, MarketSummary[]>
 
 class PolymarketServiceError extends Error {
   status: number
@@ -106,9 +110,9 @@ export default class PolymarketService {
     return payload
   }
 
-  async getFlipped(windowHours = 168): Promise<MarketSummary[]> {
+  async getFlipped(windowHours = 168): Promise<FlippedResponse> {
     const now = this.nowFn()
-    const cached = this.lookupCache<MarketSummary[]>(CACHE_KEY_FLIPPED, now)
+    const cached = this.lookupCache<FlippedResponse>(CACHE_KEY_FLIPPED, now)
 
     if (cached) {
       return cached
@@ -117,7 +121,7 @@ export default class PolymarketService {
     const requestUrl = this.buildUrl(now, windowHours)
     logger.debug({ url: requestUrl.toString() }, 'polymarket flipped fetch started')
     const data = await this.fetchEvents(requestUrl)
-    const markets = data
+    const candidates = data
       .flatMap((entry) => this.normaliseMarkets(entry, now))
       .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 50_000)
       .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
@@ -130,10 +134,20 @@ export default class PolymarketService {
 
         return DateTime.fromISO(a.endDate).toMillis() - DateTime.fromISO(b.endDate).toMillis()
       })
-      .map((candidate) => this.toSummary(candidate))
 
-    this.setCache(CACHE_KEY_FLIPPED, markets, now)
-    return markets
+    const payload = this.buildFlippedCategories(candidates)
+
+    logger.debug(
+      {
+        counts: Object.fromEntries(
+          Object.entries(payload).map(([key, markets]) => [key, markets.length])
+        ),
+      },
+      'polymarket flipped fetch completed'
+    )
+
+    this.setCache(CACHE_KEY_FLIPPED, payload, now)
+    return payload
   }
 
   private lookupCache<T>(key: string, now: DateTime): T | null {
@@ -177,8 +191,8 @@ export default class PolymarketService {
     url.searchParams.set('active', 'true')
     url.searchParams.set('archived', 'false')
 
-    // Tag 1 is "Sports", 64 is for "Esports", 102467 is for "Crypto 15 minutes", 102175 is for "Crypto 1 hour", 102531 is "Crypto 4H"
-    for (const tagId of [1, 64, 102467, 102175, 102531]) {
+    // Tag 1 is "Sports", 64 is for "Esports", 102467 is for "Crypto 15 minutes", 102175 is for "Crypto 1 hour", 102531 is "Crypto 4H", 84 is for "Weather", 1013 is for "Earnings"
+    for (const tagId of [1, 64, 102467, 102175, 102531, 84, 1013]) {
       url.searchParams.append('exclude_tag_id', tagId.toString())
     }
     const endDateMin = now.toISODate() ?? undefined
@@ -649,7 +663,43 @@ export default class PolymarketService {
       return false
     }
 
-    return Math.abs(market.oneDayPriceChange) >= 0.5
+    return Math.abs(market.oneDayPriceChange) >= 0.2
+  }
+
+  private resolveFlippedCategory(market: MarketCandidate): FlippedCategory | null {
+    if (market.oneDayPriceChange === null) {
+      return null
+    }
+
+    const absChange = Math.abs(market.oneDayPriceChange)
+
+    if (absChange >= 0.5) return 'aboveFifty'
+    if (absChange >= 0.2) return 'twentyToFifty'
+
+    return null
+  }
+
+  private buildFlippedCategories(candidates: MarketCandidate[]): FlippedResponse {
+    const categories: FlippedResponse = {
+      twentyToFifty: [],
+      aboveFifty: [],
+    }
+
+    for (const candidate of candidates) {
+      const category = this.resolveFlippedCategory(candidate)
+      if (!category) {
+        continue
+      }
+
+      const categoryList = categories[category]
+      if (categoryList.length >= 5) {
+        continue
+      }
+
+      categoryList.push(this.toSummary(candidate))
+    }
+
+    return categories
   }
 
   private resolveBucket(price: number | null): BucketKey | null {
@@ -657,22 +707,20 @@ export default class PolymarketService {
       return null
     }
 
-    if (price <= 0.01) return 'onePercent'
-    if (price <= 0.02) return 'twoPercent'
-    if (price <= 0.03) return 'threePercent'
-    if (price <= 0.04) return 'fourPercent'
-    if (price <= 0.05) return 'fivePercent'
+    if (price <= 0.05) return 'oneToFive'
+    if (price <= 0.10) return 'fiveToTen'
+    if (price <= 0.15) return 'tenToFifteen'
+    if (price <= 0.20) return 'fifteenToTwenty'
 
     return null
   }
 
   private buildBuckets(candidates: MarketCandidate[]): OpportunitiesResponse {
     const buckets: OpportunitiesResponse = {
-      onePercent: [],
-      twoPercent: [],
-      threePercent: [],
-      fourPercent: [],
-      fivePercent: [],
+      oneToFive: [],
+      fiveToTen: [],
+      tenToFifteen: [],
+      fifteenToTwenty: [],
     }
 
     for (const candidate of candidates) {
