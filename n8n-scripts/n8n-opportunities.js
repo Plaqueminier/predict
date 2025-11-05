@@ -61,10 +61,11 @@ function formatRow(m) {
   const prices = "`" + zipOutcomes(m.outcomes, m.outcomePrices) + "`";
   const timeLeft = "`" + (m.timeToEnd || (m.endDate ? computeTimeLeftFromEndDate(m.endDate) : "")) + "`";
   const volume = m.volume !== null && m.volume !== undefined ? "`$" + formatVolume(m.volume) + "`" : "";
+  const score = m.score !== null && m.score !== undefined ? "`" + m.score + "/100`" : "";
   const q = "*" + escMD(m.question || "") + "*";
   const link = clickableNoPreview(m.eventUrl || m.url || "");
-  // Two succinct lines per market
-  return `• ${prices} • ⏳ ${timeLeft}${volume ? ` • 💰 ${volume}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
+  // Two succinct lines per market with score
+  return `• ${prices} • ⏳ ${timeLeft}${volume ? ` • 💰 ${volume}` : ""}${score ? ` • ⭐ ${score}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
 }
 
 function formatBucketList(bucketArray, bucketName) {

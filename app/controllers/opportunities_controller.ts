@@ -4,6 +4,7 @@ import logger from '@adonisjs/core/services/logger'
 import PolymarketService, {
   OpportunitiesResponse,
   FlippedResponse,
+  VelocityResponse,
   PolymarketServiceError,
 } from '#services/polymarket_service'
 
@@ -56,6 +57,31 @@ export default class OpportunitiesController {
 
       return response.status(500).send({
         error: 'Unexpected error while fetching flipped markets',
+      })
+    }
+  }
+
+  async velocity({ request, response }: HttpContext) {
+    logger.debug({ path: request.url(), ip: request.ip() }, 'markets velocity requested')
+
+    try {
+      const categories: VelocityResponse = await this.polymarketService.getVelocity()
+      return response.ok(categories)
+    } catch (error) {
+      if (error instanceof PolymarketServiceError) {
+        logger.warn(
+          { message: error.message, status: error.status },
+          'markets velocity upstream failure'
+        )
+        return response.status(error.status).send({
+          error: error.message,
+        })
+      }
+
+      logger.error(error, 'markets velocity unexpected failure')
+
+      return response.status(500).send({
+        error: 'Unexpected error while fetching velocity markets',
       })
     }
   }

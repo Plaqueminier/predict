@@ -1,9 +1,9 @@
 // n8n FUNCTION node (NOT Function Item)
 // INPUT: $input.all() — one of the items must contain keys:
-//   twentyToFifty, aboveFifty
+//   moderate, fast, rapid
 //   (your sample outer array with one object is also supported)
 // OUTPUT: one item with
-//   { json: { texts: {twentyToFifty, aboveFifty}, counts: {..} } }
+//   { json: { texts: {moderate, fast, rapid}, counts: {..} } }
 // Each texts.<category> is a Discord-friendly bullet list with clickable links
 // and NO preview cards (we use <url>).
 
@@ -67,8 +67,8 @@ function formatRow(m) {
   const score = m.score !== null && m.score !== undefined ? "`" + m.score + "/100`" : "";
   const q = "*" + escMD(m.question || "") + "*";
   const link = clickableNoPreview(m.eventUrl || m.url || "");
-  // Two succinct lines per market with price change, volume, and score
-  return `• ${prices} • ⏳ ${timeLeft}${priceChange ? ` • 📊 ${priceChange}` : ""}${volume ? ` • 💰 ${volume}` : ""}${score ? ` • ⭐ ${score}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
+  // Two succinct lines per market with velocity (price change), volume, and score
+  return `• ${prices} • ⏳ ${timeLeft}${priceChange ? ` • 🚀 ${priceChange}` : ""}${volume ? ` • 💰 ${volume}` : ""}${score ? ` • ⭐ ${score}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
 }
 
 function formatCategoryList(categoryArray, categoryName) {
@@ -79,7 +79,7 @@ function formatCategoryList(categoryArray, categoryName) {
 }
 
 function extractCategoriesFromItems(items) {
-  const out = { twentyToFifty: [], aboveFifty: [] };
+  const out = { moderate: [], fast: [], rapid: [] };
 
   for (const it of items) {
     const j = it.json;
@@ -105,8 +105,9 @@ const items = $input.all();
 const categories = extractCategoriesFromItems(items);
 
 const names = {
-  twentyToFifty: "20-50% flipped markets",
-  aboveFifty:    ">50% flipped markets",
+  moderate: "Moderate velocity (10-20%)",
+  fast:     "Fast velocity (20-30%)",
+  rapid:    "Rapid velocity (>30%)",
 };
 
 const texts = {};
