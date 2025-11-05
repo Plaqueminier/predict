@@ -81,7 +81,7 @@ export default class PolymarketService {
     return payload
   }
 
-  async getFlipped(windowHours = 168): Promise<FlippedResponse> {
+  async getFlipped(windowHours = 72): Promise<FlippedResponse> {
     const now = this.nowFn()
     const cached = PolymarketService.cache.lookup<FlippedResponse>(CACHE_KEY_FLIPPED, now)
 
@@ -120,7 +120,7 @@ export default class PolymarketService {
     return payload
   }
 
-  async getVelocity(windowHours = 168): Promise<VelocityResponse> {
+  async getVelocity(windowHours = 72): Promise<VelocityResponse> {
     const now = this.nowFn()
     const cached = PolymarketService.cache.lookup<VelocityResponse>(CACHE_KEY_VELOCITY, now)
 
