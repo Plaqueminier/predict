@@ -56,7 +56,15 @@ export default class PolymarketService {
     const data = await fetchEvents(requestUrl)
     const candidates = data
       .flatMap((entry) => normaliseMarkets(entry, now))
-      .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 10_000)
+      .filter((market) => {
+        const volume = market.volume ?? 0
+        const hours = market.hoursToClose ?? 999
+        // Lower volume requirement for short-term markets (4H markets need <$10k volume)
+        if (hours <= 4) {
+          return volume >= 100 // Only $100 minimum for markets ending in <4h
+        }
+        return volume >= 10_000 // $10k minimum for longer-term markets
+      })
       .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
       .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
       .sort((a, b) => {

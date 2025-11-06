@@ -4,61 +4,69 @@ import type { MarketCandidate } from './types.js'
  * Calculate opportunity score (0-100) - higher is better/safer
  *
  * This score helps identify the safest arbitrage opportunities by combining:
- * 1. Volume (40 points max): Higher volume = more liquid, easier to enter/exit
- *    - $1M+ volume gets full 40 points
+ * 1. Time to resolution (70 points max): DOMINANT FACTOR - Shorter time = less uncertainty
+ *    - <4 hours gets full 70 points (Crypto 4H markets!)
+ *    - <8 hours gets 50 points
+ *    - <12 hours gets 35 points
+ *    - Scales down dramatically as time increases
+ *
+ * 2. Volume (15 points max): Secondary factor for liquidity
+ *    - $1M+ volume gets full 15 points
  *    - Scales down for lower volumes
  *
- * 2. Time to resolution (30 points max): Shorter time = less uncertainty
- *    - <12 hours gets full 30 points
- *    - Scales down as time increases (more time = more risk)
- *
- * 3. Price attractiveness (30 points max): Better odds = higher potential return
+ * 3. Price attractiveness (15 points max): Tertiary factor
  *    - Lower prices (1-5%) get more points than higher prices (15-20%)
  *    - Represents your potential upside
  */
 export function calculateOpportunityScore(candidate: MarketCandidate): number {
   let score = 0
 
-  // Volume score (0-40 points): Liquidity is crucial for safe entry/exit
+  // Time score (0-70 points): DOMINANT FACTOR - Ending soon is king
+  const hours = candidate.hoursToClose ?? 24
+  if (hours <= 4) {
+    score += 70 // <4h is ideal (Crypto 4H markets!)
+  } else if (hours <= 8) {
+    score += 50 // <8h is good but clearly less valuable
+  } else if (hours <= 12) {
+    score += 35 // <12h is okay
+  } else if (hours <= 24) {
+    score += 20 // <24h is acceptable
+  } else if (hours <= 48) {
+    score += 10 // <48h is not ideal
+  } else if (hours <= 72) {
+    score += 5 // <72h is low priority
+  } else {
+    score += 1 // >72h is very low priority
+  }
+
+  // Volume score (0-15 points): Secondary factor for liquidity
   const volume = candidate.volume ?? 0
   if (volume >= 1_000_000) {
-    score += 40 // $1M+ is excellent liquidity
+    score += 15 // $1M+ is excellent liquidity
   } else if (volume >= 500_000) {
-    score += 35 // $500K+ is very good
+    score += 13 // $500K+ is very good
   } else if (volume >= 250_000) {
-    score += 30 // $250K+ is good
+    score += 11 // $250K+ is good
   } else if (volume >= 100_000) {
-    score += 25 // $100K+ is decent
+    score += 9 // $100K+ is decent
   } else if (volume >= 50_000) {
-    score += 20 // $50K+ is acceptable
+    score += 7 // $50K+ is acceptable
+  } else if (volume >= 10_000) {
+    score += 5 // $10K+ is minimal
   } else {
-    score += 15 // Below $50K is risky
+    score += 3 // Below $10K is very risky
   }
 
-  // Time score (0-30 points): Shorter time = less uncertainty
-  const hours = candidate.hoursToClose ?? 24
-  if (hours <= 12) {
-    score += 30 // <12h is ideal
-  } else if (hours <= 24) {
-    score += 25 // <24h is very good
-  } else if (hours <= 48) {
-    score += 20 // <48h is good
-  } else if (hours <= 72) {
-    score += 15 // <72h is okay
-  } else {
-    score += 10 // >72h has more risk
-  }
-
-  // Price score (0-30 points): Lower price = higher potential return
+  // Price score (0-15 points): Tertiary factor
   const price = candidate.bestPrice ?? 0.2
   if (price <= 0.05) {
-    score += 30 // 1-5% range: 19x-20x potential return
+    score += 15 // 1-5% range: 19x-20x potential return
   } else if (price <= 0.1) {
-    score += 25 // 5-10% range: 9x-10x potential return
+    score += 13 // 5-10% range: 9x-10x potential return
   } else if (price <= 0.15) {
-    score += 20 // 10-15% range: 6x-7x potential return
+    score += 11 // 10-15% range: 6x-7x potential return
   } else {
-    score += 15 // 15-20% range: 4x-5x potential return
+    score += 9 // 15-20% range: 4x-5x potential return
   }
 
   return Math.round(score)

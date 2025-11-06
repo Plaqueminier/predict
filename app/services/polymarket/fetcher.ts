@@ -19,13 +19,13 @@ export function buildUrl(now: DateTime, windowHours: number): URL {
     url.pathname = '/events'
   }
 
-  url.searchParams.set('limit', '500')
+  url.searchParams.set('limit', '1000')
   url.searchParams.set('closed', 'false')
   url.searchParams.set('active', 'true')
   url.searchParams.set('archived', 'false')
 
   // Tag 1 is "Sports", 64 is for "Esports", 102467 is for "Crypto 15 minutes", 102175 is for "Crypto 1 hour", 102531 is "Crypto 4H", 84 is for "Weather", 1013 is for "Earnings"
-  for (const tagId of [1, 64, 102467, 102175, 102531, 84, 1013]) {
+  for (const tagId of [1, 64, 102467, 102175, 84, 1013]) {
     url.searchParams.append('exclude_tag_id', tagId.toString())
   }
   const endDateMin = now.toISODate() ?? undefined
