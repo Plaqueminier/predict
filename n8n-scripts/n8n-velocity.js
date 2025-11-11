@@ -60,15 +60,18 @@ function formatVolume(vol) {
 function formatRow(m) {
   const prices = "`" + zipOutcomes(m.outcomes, m.outcomePrices) + "`";
   const timeLeft = "`" + (m.timeToEnd || (m.endDate ? computeTimeLeftFromEndDate(m.endDate) : "")) + "`";
-  const priceChange = m.oneDayPriceChange !== null && m.oneDayPriceChange !== undefined
+  const dayChange = m.oneDayPriceChange !== null && m.oneDayPriceChange !== undefined
     ? "`" + (m.oneDayPriceChange >= 0 ? "+" : "") + (m.oneDayPriceChange * 100).toFixed(1) + "%`"
+    : "";
+  const weekChange = m.oneWeekPriceChange !== null && m.oneWeekPriceChange !== undefined
+    ? "`" + (m.oneWeekPriceChange >= 0 ? "+" : "") + (m.oneWeekPriceChange * 100).toFixed(1) + "%`"
     : "";
   const volume = m.volume !== null && m.volume !== undefined ? "`$" + formatVolume(m.volume) + "`" : "";
   const score = m.score !== null && m.score !== undefined ? "`" + m.score + "/100`" : "";
   const q = "*" + escMD(m.question || "") + "*";
   const link = clickableNoPreview(m.eventUrl || m.url || "");
-  // Two succinct lines per market with velocity (price change), volume, and score
-  return `• ${prices} • ⏳ ${timeLeft}${priceChange ? ` • 🚀 ${priceChange}` : ""}${volume ? ` • 💰 ${volume}` : ""}${score ? ` • ⭐ ${score}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
+  // Two succinct lines per market with day/week velocity, volume, and score
+  return `• ${prices} • ⏳ ${timeLeft}${dayChange ? ` • 📊 Day:${dayChange}` : ""}${weekChange ? ` Week:${weekChange}` : ""}${volume ? ` • 💰 ${volume}` : ""}${score ? ` • ⭐ ${score}` : ""}\n  ${q}${link ? ` — ${link}` : ""}`;
 }
 
 function formatCategoryList(categoryArray, categoryName) {
@@ -105,9 +108,9 @@ const items = $input.all();
 const categories = extractCategoriesFromItems(items);
 
 const names = {
-  moderate: "Moderate velocity (10-20%)",
-  fast:     "Fast velocity (20-30%)",
-  rapid:    "Rapid velocity (>30%)",
+  moderate: "Steady trends (1-5% daily)",
+  fast:     "Active trends (5-10% daily)",
+  rapid:    "Fast trends (10-20% daily)",
 };
 
 const texts = {};

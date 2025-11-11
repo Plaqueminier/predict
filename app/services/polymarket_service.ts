@@ -6,7 +6,7 @@ import {
   CACHE_KEY_FLIPPED,
   CACHE_KEY_VELOCITY,
 } from './polymarket/cache.js'
-import { buildUrl, fetchEvents } from './polymarket/fetcher.js'
+import { buildUrl, buildStableUrl, fetchEvents } from './polymarket/fetcher.js'
 import { normaliseMarkets, deduplicateTags } from './polymarket/normalizer.js'
 import {
   calculateOpportunityScore,
@@ -128,7 +128,7 @@ export default class PolymarketService {
     return payload
   }
 
-  async getVelocity(windowHours = 72): Promise<VelocityResponse> {
+  async getVelocity(windowHours = 672): Promise<VelocityResponse> {
     const now = this.nowFn()
     const cached = PolymarketService.cache.lookup<VelocityResponse>(CACHE_KEY_VELOCITY, now)
 
@@ -136,20 +136,20 @@ export default class PolymarketService {
       return cached
     }
 
-    const requestUrl = buildUrl(now, windowHours)
+    const requestUrl = buildStableUrl(now, windowHours)
     logger.debug({ url: requestUrl.toString() }, 'polymarket velocity fetch started')
     const data = await fetchEvents(requestUrl)
     const candidates = data
       .flatMap((entry) => normaliseMarkets(entry, now))
-      .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 50_000)
-      .filter((market): market is MarketCandidate => this.hasInvestableOdds(market))
-      .filter((market): market is MarketCandidate => this.hasVelocity(market))
+      .filter((market): market is MarketCandidate => (market.volume ?? 0) >= 10_000)
+      .filter((market): market is MarketCandidate => this.hasStableTrendOdds(market))
+      .filter((market): market is MarketCandidate => this.hasStableVelocity(market))
       .filter((market): market is MarketCandidate => this.isWithinWindow(market, windowHours))
       .sort((a, b) => {
-        // Sort by absolute velocity descending (fastest first)
-        const velA = Math.abs(a.oneDayPriceChange ?? 0)
-        const velB = Math.abs(b.oneDayPriceChange ?? 0)
-        return velB - velA
+        // Sort by score descending (best stable trends first)
+        const scoreA = calculateVelocityScore(a)
+        const scoreB = calculateVelocityScore(b)
+        return scoreB - scoreA
       })
 
     const payload = this.buildVelocityCategories(candidates)
@@ -201,6 +201,27 @@ export default class PolymarketService {
     return Math.abs(market.oneDayPriceChange) >= 0.2
   }
 
+  private hasStableTrendOdds(market: MarketCandidate): boolean {
+    const price = market.bestPrice
+    if (price === null) {
+      return false
+    }
+
+    // Target markets with clear direction: < 0.3 or > 0.7
+    return price <= 0.3 || price >= 0.7
+  }
+
+  private hasStableVelocity(market: MarketCandidate): boolean {
+    if (market.oneDayPriceChange === null) {
+      return false
+    }
+
+    const absDayChange = Math.abs(market.oneDayPriceChange)
+
+    // Day velocity must be >= 0.01 (1%) and <= 0.2 (20%)
+    return absDayChange >= 0.01 && absDayChange <= 0.2
+  }
+
   private resolveFlippedCategory(market: MarketCandidate): FlippedCategory | null {
     if (market.oneDayPriceChange === null) {
       return null
@@ -247,14 +268,6 @@ export default class PolymarketService {
     return categories
   }
 
-  private hasVelocity(market: MarketCandidate): boolean {
-    if (market.oneDayPriceChange === null) {
-      return false
-    }
-
-    return Math.abs(market.oneDayPriceChange) >= 0.1
-  }
-
   private resolveVelocityCategory(market: MarketCandidate): VelocityCategory | null {
     if (market.oneDayPriceChange === null) {
       return null
@@ -262,9 +275,10 @@ export default class PolymarketService {
 
     const absChange = Math.abs(market.oneDayPriceChange)
 
-    if (absChange >= 0.3) return 'rapid'
-    if (absChange >= 0.2) return 'fast'
-    if (absChange >= 0.1) return 'moderate'
+    // Categories now represent stable, consistent moves (not explosive momentum)
+    if (absChange >= 0.01 && absChange < 0.05) return 'moderate' // 1-5% daily: steady, reliable
+    if (absChange >= 0.05 && absChange < 0.1) return 'fast' // 5-10% daily: good velocity
+    if (absChange >= 0.1 && absChange <= 0.2) return 'rapid' // 10-20% daily: still acceptable
 
     return null
   }

@@ -55,10 +55,14 @@
     "@adonisjs/core": "^6.18.0",
     "@adonisjs/cors": "^2.2.1",
     "@adonisjs/lucid": "^21.6.1",
+    "@polymarket/clob-client": "4.22.8",
     "@vinejs/vine": "^3.0.1",
     "better-sqlite3": "12.4.1",
+    "dotenv": "17.2.3",
+    "ethers": "^5.8.0",
     "luxon": "3.7.2",
-    "reflect-metadata": "^0.2.2"
+    "reflect-metadata": "^0.2.2",
+    "tsx": "4.20.6"
   },
   "hotHook": {
     "boundaries": [

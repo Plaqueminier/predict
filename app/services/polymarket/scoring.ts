@@ -135,60 +135,88 @@ export function calculateFlippedScore(candidate: MarketCandidate): number {
 /**
  * Calculate velocity score (0-100) - higher is better
  *
- * This score helps identify the best momentum opportunities by combining:
- * 1. Volume (30 points max): Liquidity matters but less critical than velocity
+ * This score helps identify stable trending markets with small, consistent gains by combining:
+ * 1. Volume (50 points max): Liquidity is critical for stable markets
+ *    - Higher volume = more stable, reliable price movements
+ *    - Better ability to enter/exit positions
  *
- * 2. Velocity magnitude (50 points max): Speed of movement is most important
- *    - Rapid velocity (>30%) gets full 50 points
- *    - Fast velocity (20-30%) gets 40 points
- *    - Moderate velocity (10-20%) gets 30 points
+ * 2. Day velocity consistency (30 points max): Steady daily movement is key
+ *    - Target: 0.02-0.08 daily change (2-8%)
+ *    - Too slow (<0.02) = capital locked up
+ *    - Too fast (>0.2) = volatile, risky
  *
- * 3. Time to resolution (20 points max): Shorter time = momentum more likely to continue
- *    - <24 hours is best for riding momentum
+ * 3. Week velocity confirmation (20 points max): Weekly trend should confirm daily
+ *    - Week change should be in same direction as day change
+ *    - Indicates sustained trend, not noise
  */
 export function calculateVelocityScore(candidate: MarketCandidate): number {
   let score = 0
 
-  // Volume score (0-30 points): Less weight than other routes
+  // Volume score (0-50 points): DOMINANT FACTOR - liquidity is king for stable plays
   const volume = candidate.volume ?? 0
   if (volume >= 1_000_000) {
-    score += 30
+    score += 50 // $1M+ is excellent - very stable market
   } else if (volume >= 500_000) {
-    score += 25
+    score += 45 // $500K+ is very good
   } else if (volume >= 250_000) {
-    score += 20
+    score += 40 // $250K+ is good
   } else if (volume >= 100_000) {
-    score += 15
+    score += 35 // $100K+ is decent
+  } else if (volume >= 50_000) {
+    score += 30 // $50K+ is acceptable
   } else {
-    score += 10
+    score += 20 // Below $50K is risky for stable plays
   }
 
-  // Velocity magnitude score (0-50 points): This is the key factor
-  const velocity = Math.abs(candidate.oneDayPriceChange ?? 0)
-  if (velocity >= 0.5) {
-    score += 50 // >50% velocity is explosive
-  } else if (velocity >= 0.4) {
-    score += 45 // 40-50% velocity is very fast
-  } else if (velocity >= 0.3) {
-    score += 40 // 30-40% velocity is fast (rapid category)
-  } else if (velocity >= 0.2) {
-    score += 35 // 20-30% velocity is moderate-fast
-  } else if (velocity >= 0.15) {
-    score += 30 // 15-20% velocity is moderate
+  // Day velocity score (0-30 points): Steady movement, not explosive
+  const dayVelocity = Math.abs(candidate.oneDayPriceChange ?? 0)
+  if (dayVelocity >= 0.03 && dayVelocity <= 0.06) {
+    score += 30 // 3-6% daily is ideal - steady gains
+  } else if (dayVelocity >= 0.02 && dayVelocity < 0.03) {
+    score += 28 // 2-3% daily is good but slower
+  } else if (dayVelocity >= 0.01 && dayVelocity < 0.02) {
+    score += 25 // 1-2% daily is slower but still usable
+  } else if (dayVelocity >= 0.06 && dayVelocity <= 0.08) {
+    score += 26 // 6-8% daily is acceptable but getting faster
+  } else if (dayVelocity >= 0.08 && dayVelocity <= 0.1) {
+    score += 20 // 8-10% is getting volatile
+  } else if (dayVelocity > 0.1 && dayVelocity <= 0.15) {
+    score += 15 // 10-15% is too fast but still usable
+  } else if (dayVelocity > 0.15 && dayVelocity <= 0.2) {
+    score += 10 // 15-20% is very volatile
   } else {
-    score += 25 // <15% velocity is slow
+    score += 5 // Either too slow (<1%) or too fast (>20%)
   }
 
-  // Time score (0-20 points): Shorter time better for momentum plays
-  const hours = candidate.hoursToClose ?? 168
-  if (hours <= 24) {
-    score += 20 // <24h is ideal for momentum
-  } else if (hours <= 48) {
-    score += 15 // <48h is good
-  } else if (hours <= 72) {
-    score += 10 // <72h is okay
+  // Week velocity confirmation (0-20 points): Trend consistency check
+  const weekVelocity = candidate.oneWeekPriceChange
+  const dayChange = candidate.oneDayPriceChange
+
+  if (weekVelocity !== null && dayChange !== null) {
+    // Check if week and day are in same direction (both positive or both negative)
+    const sameDirection = (weekVelocity > 0 && dayChange > 0) || (weekVelocity < 0 && dayChange < 0)
+
+    if (sameDirection) {
+      const absWeekVelocity = Math.abs(weekVelocity)
+      // Week velocity should be substantial but not explosive (steady trend over time)
+      if (absWeekVelocity >= 0.1 && absWeekVelocity <= 0.3) {
+        score += 20 // Perfect: 10-30% weekly change confirms steady trend
+      } else if (absWeekVelocity >= 0.05 && absWeekVelocity < 0.1) {
+        score += 15 // Good: 5-10% weekly is slower but consistent
+      } else if (absWeekVelocity >= 0.3 && absWeekVelocity <= 0.5) {
+        score += 12 // Acceptable: 30-50% weekly is getting fast
+      } else if (absWeekVelocity > 0.5) {
+        score += 8 // Too fast: >50% weekly is volatile
+      } else {
+        score += 5 // Too slow: <5% weekly might not move enough
+      }
+    } else {
+      // Direction mismatch = unstable trend
+      score += 3
+    }
   } else {
-    score += 5 // >72h makes momentum less reliable
+    // Missing data = less confident
+    score += 5
   }
 
   return Math.round(score)

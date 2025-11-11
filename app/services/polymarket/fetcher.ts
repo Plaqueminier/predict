@@ -5,6 +5,9 @@ import { PolymarketServiceError, type RawEvent } from './types.js'
 
 const DEFAULT_ENDPOINT = 'https://gamma-api.polymarket.com/events'
 
+/**
+ * Build URL for general opportunities and flipped markets (excludes very volatile short-term markets)
+ */
 export function buildUrl(now: DateTime, windowHours: number): URL {
   const base = env.get('POLYMARKET_API_URL', DEFAULT_ENDPOINT)
   let url: URL
@@ -26,6 +29,47 @@ export function buildUrl(now: DateTime, windowHours: number): URL {
 
   // Tag 1 is "Sports", 64 is for "Esports", 102467 is for "Crypto 15 minutes", 102175 is for "Crypto 1 hour", 102531 is "Crypto 4H", 84 is for "Weather", 1013 is for "Earnings"
   for (const tagId of [1, 64, 102467, 102175, 84, 1013]) {
+    url.searchParams.append('exclude_tag_id', tagId.toString())
+  }
+  const endDateMin = now.toISODate() ?? undefined
+  const endDateMax = now.plus({ hours: windowHours }).toISODate() ?? undefined
+  if (endDateMin) {
+    url.searchParams.set('end_date_min', url.searchParams.get('end_date_min') ?? endDateMin)
+  }
+  if (endDateMax) {
+    url.searchParams.set('end_date_max', url.searchParams.get('end_date_max') ?? endDateMax)
+  }
+
+  return url
+}
+
+/**
+ * Build URL for stable velocity markets (excludes ALL volatile markets including crypto and sports)
+ */
+export function buildStableUrl(now: DateTime, windowHours: number): URL {
+  const base = env.get('POLYMARKET_API_URL', DEFAULT_ENDPOINT)
+  let url: URL
+
+  try {
+    url = new URL(base)
+  } catch (error) {
+    throw new PolymarketServiceError('Invalid POLYMARKET_API_URL', 500)
+  }
+
+  if (!url.pathname || url.pathname === '/') {
+    url.pathname = '/events'
+  }
+
+  url.searchParams.set('limit', '1000')
+  url.searchParams.set('closed', 'false')
+  url.searchParams.set('active', 'true')
+  url.searchParams.set('archived', 'false')
+
+  // Exclude volatile markets:
+  // Tag 1 = Sports, 64 = Esports, 84 = Weather, 1013 = Earnings
+  // Tag 21 = Crypto (general)
+  // Tag 972 = Tweet Market
+  for (const tagId of [1, 64, 84, 1013, 21, 972]) {
     url.searchParams.append('exclude_tag_id', tagId.toString())
   }
   const endDateMin = now.toISODate() ?? undefined
